@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "konfidant"
-version = "0.1.0"
+version = "0.2.0"
 description = "Python SDK for the Konfidant API"
 license = "MIT"
 packages = [{ include = "konfidant" }]
@@ -20,3 +20,23 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[project]
+name = "konfidant"
+version = "0.2.0"
+authors = [
+  { name="Konfidant", email="hello@konfidant.app" },
+]
+
+description = "Konfidant.app Python SDK"
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+license = "MIT"
+
+[project.urls]
+Homepage = "https://github.com/konfidant/sdk-py"
+Issues = "https://github.com/konfidant/sdk-py/issues"
