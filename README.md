@@ -9,7 +9,6 @@ Python SDK for the [Konfidant](https://www.konfidant.app) API. Encrypt and share
 ## Requirements
 
 - Python 3.11+
-- [Poetry](https://python-poetry.org/) (for development)
 
 ## Installation
 
@@ -25,6 +24,7 @@ from konfidant import KonfidantClient
 client = KonfidantClient(api_key="your-api-key")
 
 result = client.share_text(text="Secret message", ttl_hours=24)
+
 print(result.share_url)
 ```
 
@@ -42,7 +42,7 @@ client = KonfidantClient(api_key="your-api-key")
 client = KonfidantClient(
     api_key="your-api-key",
     base_url="https://www.konfidant.app",  # default
-    timeout=120.0,                          # seconds; None disables timeout
+    timeout=120.0,                         # seconds; None disables timeout
 )
 ```
 
@@ -61,16 +61,17 @@ print(result.expires_at)    # "2026-06-01 00:00:00"
 print(result.verified_burn) # True
 ```
 
-| Parameter  | Type  | Description                         |
-|------------|-------|-------------------------------------|
-| `text`     | `str` | The message to encrypt              |
-| `ttl_hours`| `int` | How long the link is valid (hours)  |
+| Parameter  | Type  | Description                        |
+|------------|-------|------------------------------------|
+| `text`     | `str` | The message to encrypt             |
+| `ttl_hours`| `int` | How long the link is valid (hours) |
 
 ---
 
 ### Share a File (end-to-end convenience)
 
-The simplest way to share a file. Handles the full flow: get a presigned URL, upload the file, poll until encryption is complete, return the share link.
+The simplest way to share a file. Handles the full flow: get a presigned URL, upload the file, poll until encryption
+is complete, return the share link.
 
 ```python
 with open("document.pdf", "rb") as f:
@@ -104,7 +105,8 @@ print(result.verified_burn) # True
 
 ### Share a File (step-by-step)
 
-Use the low-level methods when you need more control — for example, to track upload progress or handle polling yourself.
+Use the low-level methods when you need more control — for example, to track upload progress or handle polling
+yourself.
 
 **Step 1 — Request a presigned upload URL:**
 
@@ -115,12 +117,12 @@ presigned = client.share_file(
     ttl_hours=48,
 )
 
-print(presigned.upload_url)  # short-lived S3 URL
-print(presigned.file_key)    # use this to poll status
-print(presigned.poll_url)    # convenience poll URL
+print(presigned.upload_url) # short-lived URL
+print(presigned.file_key)   # use this to poll status
+print(presigned.poll_url)   # convenience poll URL
 ```
 
-**Step 2 — Upload the file to S3:**
+**Step 2 — Upload the file:**
 
 ```python
 with open("archive.zip", "rb") as f:
@@ -172,8 +174,8 @@ print(response.pagination.has_more)
 
 ```python
 response = client.list_shares(
-    type="file",       # "file" or "text"
-    status="active",   # "active" or "accessed"
+    type="file",     # "file" or "text"
+    status="active", # "active" or "accessed"
     limit=10,
     offset=20,
 )
@@ -205,7 +207,8 @@ except KonfidantApiError as e:
     print(e.body)         # raw response body (dict or str)
 ```
 
-`upload_file` raises `KonfidantApiError` if the S3 upload fails. `share_and_upload_file` raises `TimeoutError` if encryption does not complete within the configured timeout.
+`upload_file` raises `KonfidantApiError` if the S3 upload fails. `share_and_upload_file` raises `TimeoutError` if
+encryption does not complete within the configured timeout.
 
 ## Development
 
