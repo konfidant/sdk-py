@@ -1,6 +1,8 @@
 # Konfidant Python SDK
 
+[![Test](https://github.com/konfidant/sdk-py/actions/workflows/test.yml/badge.svg)](https://github.com/konfidant/sdk-py/actions/workflows/test.yml)
 [![Codacy Badge](https://app.codacy.com/project/badge/Grade/f4489c7a56e0492ab94abd7470114ef6)](https://app.codacy.com/gh/konfidant/sdk-py/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
+[![Codacy Badge](https://app.codacy.com/project/badge/Coverage/f4489c7a56e0492ab94abd7470114ef6)](https://app.codacy.com/gh/konfidant/sdk-py/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_coverage)
 
 Python SDK for the [Konfidant](https://www.konfidant.app) API. Encrypt and share text messages and files with time-limited, burn-after-reading links.
 
