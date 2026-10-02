@@ -1,0 +1,19 @@
+README.md
+  s_c3be0ba5d988e9::t_c1ae7adb3215b5 111-112
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "1c5bcc4b0c4487d7474f5f698b758ae01f4e0b88",
+  "prompts": {},
+  "sessions": {
+    "s_c3be0ba5d988e9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bbd716dd-6116-4ba2-aa92-491638f073f9",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "msdundar <msdundars@gmail.com>"
+    }
+  }
+}
