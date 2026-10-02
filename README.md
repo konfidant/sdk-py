@@ -108,6 +108,8 @@ print(result.verified_burn) # True
 Use the low-level methods when you need more control — for example, to track upload progress or handle polling
 yourself.
 
+> Maximum file size is **80 MB** (Premium and Enterprise). Larger files are rejected with a `400` error before upload.
+
 **Step 1 — Request a presigned upload URL:**
 
 ```python
