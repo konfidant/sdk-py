@@ -1,20 +1,28 @@
+import base64
 import io
+import json
+from urllib.parse import quote
 
 import httpx
 import pytest
 import respx
 
-from konfidant import KonfidantApiError, KonfidantClient
+from konfidant import KonfidantApiError, KonfidantClient, knf
 from konfidant.types import (
-    FileMetadataHeaders,
-    FileStatusResponse,
+    CompletedFileUpload,
+    FileUpload,
     ListSharesResponse,
-    ShareFileResponse,
-    ShareResult,
-    ShareTextResponse,
+    OpenedShare,
+    ShareFileResult,
+    ShareTextResult,
 )
 
 BASE_URL = "http://api.test"
+UPLOAD_URL = "http://r2.test/bucket/abc123.knf?X-Amz-Signature=sig"
+DOWNLOAD_HOST = "https://download.test"
+TOKEN = "tok+en/with=chars"
+DOWNLOAD_URL = f"{DOWNLOAD_HOST}/#t={quote(TOKEN, safe='')}"
+UPLOAD_HEADERS = {"Content-Type": "application/octet-stream", "x-amz-meta-org": "org-1"}
 
 
 @pytest.fixture
@@ -22,30 +30,26 @@ def client():
     return KonfidantClient(api_key="test-key", base_url=BASE_URL)
 
 
-def make_presigned(upload_url: str = "http://s3.test/upload") -> ShareFileResponse:
-    return ShareFileResponse(
-        upload_url=upload_url,
-        file_key="abc123.zip",
-        poll_url=f"{BASE_URL}/api/v1/files/abc123.zip/status",
-        metadata_headers=FileMetadataHeaders(
-            user_id="user-1",
-            ttl_hours="48",
-            organization_id="org-1",
-        ),
-    )
-
-
-def presigned_json(upload_url: str = "http://s3.test/upload") -> dict:
+def files_json() -> dict:
     return {
-        "upload_url": upload_url,
-        "file_key": "abc123.zip",
-        "poll_url": f"{BASE_URL}/api/v1/files/abc123.zip/status",
-        "metadata_headers": {
-            "x-amz-meta-user-id": "user-1",
-            "x-amz-meta-ttl-hours": "48",
-            "x-amz-meta-organization-id": "org-1",
-        },
+        "upload_url": UPLOAD_URL,
+        "file_key": "abc123.knf",
+        "upload_headers": UPLOAD_HEADERS,
+        "upload_expires_in": 900,
     }
+
+
+def complete_json(verified_burn: bool = True) -> dict:
+    return {
+        "download_url": DOWNLOAD_URL,
+        "file_id": "file-1",
+        "expires_at": "2026-10-05T00:00:00.000Z",
+        "verified_burn": verified_burn,
+    }
+
+
+def key_from_share_url(share_url: str) -> bytes:
+    return knf.parse_share_url(share_url).key
 
 
 # ---------------------------------------------------------------------------
@@ -59,8 +63,8 @@ def test_new_missing_api_key():
 
 
 def test_new_strips_trailing_slash():
-    c = KonfidantClient(api_key="k", base_url="https://example.com/")
-    assert c._base_url == "https://example.com"
+    c = KonfidantClient(api_key="k", base_url="http://example.com/")
+    assert c._base_url == "http://example.com"
 
 
 def test_new_default_base_url():
@@ -69,13 +73,19 @@ def test_new_default_base_url():
 
 
 def test_new_custom_timeout():
-    c = KonfidantClient(api_key="k", timeout=5.0)
-    assert c._http.timeout == httpx.Timeout(5.0)
+    c = KonfidantClient(api_key="k", timeout=30.0)
+    assert c._http.timeout.read == 30.0
 
 
 def test_new_disabled_timeout():
     c = KonfidantClient(api_key="k", timeout=None)
-    assert c._http.timeout == httpx.Timeout(None)
+    assert c._http.timeout.read is None
+
+
+def test_context_manager_closes_http_client():
+    with KonfidantClient(api_key="k") as c:
+        pass
+    assert c._http.is_closed
 
 
 # ---------------------------------------------------------------------------
@@ -84,74 +94,217 @@ def test_new_disabled_timeout():
 
 
 @respx.mock
-def test_share_text_success(client):
-    expected = {
-        "text_id": "abc",
-        "share_url": "https://download.konfidant.app?t=tok",
-        "expires_at": "2026-06-01 00:00:00",
-        "verified_burn": True,
-    }
+def test_share_text_sends_only_ciphertext(client):
     route = respx.post(f"{BASE_URL}/api/v1/texts").mock(
-        return_value=httpx.Response(201, json=expected)
+        return_value=httpx.Response(
+            201,
+            json={"download_url": DOWNLOAD_URL, "text_id": "text-1", "expires_at": "2026-10-04T00:00:00.000Z"},
+        )
     )
-
-    result = client.share_text(text="Secret", ttl_hours=24)
+    result = client.share_text("top secret", ttl_hours=24)
 
     assert route.called
-    assert route.call_count == 1
-    req = route.calls.last.request
-    assert req.method == "POST"
-    assert req.headers["Authorization"] == "Bearer test-key"
-    assert result == ShareTextResponse(**expected)
+    request = route.calls.last.request
+    assert request.headers["authorization"] == "Bearer test-key"
+    body = json.loads(request.content)
+    assert set(body) == {"ciphertext", "ttl_hours"}
+    assert body["ttl_hours"] == 24
+    assert b"top secret" not in request.content
+
+    # Standard base64 with padding of a KNF1 payload.
+    ciphertext = base64.b64decode(body["ciphertext"], validate=True)
+    assert body["ciphertext"] == base64.b64encode(ciphertext).decode()
+    assert ciphertext[:4] == b"KNF1"
+
+    assert isinstance(result, ShareTextResult)
+    assert result.text_id == "text-1"
+    assert result.expires_at == "2026-10-04T00:00:00.000Z"
+    assert result.share_url.startswith(DOWNLOAD_URL + "&k=")
+    key_part = result.share_url[len(DOWNLOAD_URL + "&k=") :]
+    assert len(key_part) == 43
+    # The key never reaches the server, but it decrypts what the server received.
+    assert key_part not in request.content.decode()
+    decrypted = knf.decrypt(key_from_share_url(result.share_url), ciphertext)
+    assert (decrypted.kind, decrypted.text) == ("text", "top secret")
 
 
 @respx.mock
-def test_share_text_sends_correct_body(client):
-    respx.post(f"{BASE_URL}/api/v1/texts").mock(
-        return_value=httpx.Response(
-            201,
-            json={"text_id": "x", "share_url": "x", "expires_at": "x", "verified_burn": False},
-        )
+def test_share_text_omits_ttl_when_none_and_allows_null_text_id(client):
+    route = respx.post(f"{BASE_URL}/api/v1/texts").mock(
+        return_value=httpx.Response(201, json={"download_url": DOWNLOAD_URL, "text_id": None, "expires_at": "x"})
     )
-    client.share_text(text="Secret", ttl_hours=24)
-    req = respx.calls.last.request
-    import json
-    body = json.loads(req.content)
-    assert body == {"text": "Secret", "ttl_hours": 24}
+    result = client.share_text("hi")
+    assert "ttl_hours" not in json.loads(route.calls.last.request.content)
+    assert result.text_id is None
+
+
+@respx.mock
+def test_share_text_uses_fresh_key_per_share(client):
+    respx.post(f"{BASE_URL}/api/v1/texts").mock(
+        return_value=httpx.Response(201, json={"download_url": DOWNLOAD_URL, "text_id": "t", "expires_at": "x"})
+    )
+    assert client.share_text("a").share_url != client.share_text("a").share_url
 
 
 @respx.mock
 def test_share_text_api_error_401(client):
     respx.post(f"{BASE_URL}/api/v1/texts").mock(
-        return_value=httpx.Response(
-            401, json={"error": "Missing or invalid Authorization header."}
-        )
+        return_value=httpx.Response(401, json={"error": "unauthorized", "message": "Missing or invalid API key."})
     )
     with pytest.raises(KonfidantApiError) as exc_info:
-        client.share_text(text="x", ttl_hours=1)
-    err = exc_info.value
-    assert err.status_code == 401
-    assert "Missing or invalid Authorization header." in str(err)
-
-
-@respx.mock
-def test_share_text_api_error_400(client):
-    respx.post(f"{BASE_URL}/api/v1/texts").mock(
-        return_value=httpx.Response(400, json={"error": "Invalid JSON body"})
-    )
-    with pytest.raises(KonfidantApiError):
-        client.share_text(text="", ttl_hours=0)
+        client.share_text("secret", ttl_hours=24)
+    assert exc_info.value.status_code == 401
+    assert str(exc_info.value) == "unauthorized"
+    assert exc_info.value.body == {"error": "unauthorized", "message": "Missing or invalid API key."}
 
 
 @respx.mock
 def test_share_text_fallback_message_on_non_json(client):
-    respx.post(f"{BASE_URL}/api/v1/texts").mock(
-        return_value=httpx.Response(500, text="Internal Server Error")
+    respx.post(f"{BASE_URL}/api/v1/texts").mock(return_value=httpx.Response(502, text="Bad Gateway"))
+    with pytest.raises(KonfidantApiError) as exc_info:
+        client.share_text("secret")
+    assert exc_info.value.status_code == 502
+    assert str(exc_info.value) == "HTTP 502"
+    assert exc_info.value.body == "Bad Gateway"
+
+
+# ---------------------------------------------------------------------------
+# Low-level file upload
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+def test_create_file_upload(client):
+    route = respx.post(f"{BASE_URL}/api/v1/files").mock(return_value=httpx.Response(201, json=files_json()))
+    upload = client.create_file_upload(1234, ttl_hours=48)
+
+    request = route.calls.last.request
+    assert request.headers["authorization"] == "Bearer test-key"
+    assert json.loads(request.content) == {"ciphertext_size": 1234, "ttl_hours": 48}
+    assert upload == FileUpload(
+        upload_url=UPLOAD_URL, file_key="abc123.knf", upload_headers=UPLOAD_HEADERS, upload_expires_in=900
+    )
+
+
+@respx.mock
+def test_create_file_upload_omits_ttl_when_none(client):
+    route = respx.post(f"{BASE_URL}/api/v1/files").mock(return_value=httpx.Response(201, json=files_json()))
+    client.create_file_upload(1234)
+    assert json.loads(route.calls.last.request.content) == {"ciphertext_size": 1234}
+
+
+def test_create_file_upload_rejects_impossible_size(client):
+    with pytest.raises(ValueError, match="too small"):
+        client.create_file_upload(32)
+
+
+@respx.mock
+def test_create_file_upload_error(client):
+    respx.post(f"{BASE_URL}/api/v1/files").mock(
+        return_value=httpx.Response(413, json={"error": "file_too_large", "message": "Max 80 MB"})
     )
     with pytest.raises(KonfidantApiError) as exc_info:
-        client.share_text(text="x", ttl_hours=1)
-    assert exc_info.value.status_code == 500
-    assert "HTTP 500" in str(exc_info.value)
+        client.create_file_upload(10**10)
+    assert exc_info.value.status_code == 413
+    assert str(exc_info.value) == "file_too_large"
+
+
+@respx.mock
+def test_upload_ciphertext_sends_exact_headers_without_authorization(client):
+    route = respx.put(UPLOAD_URL).mock(return_value=httpx.Response(200))
+    upload = FileUpload(**files_json())
+    client.upload_ciphertext(upload, b"KNF1" + b"\x00" * 60)
+
+    request = route.calls.last.request
+    assert "authorization" not in request.headers
+    assert request.headers["content-type"] == "application/octet-stream"
+    assert request.headers["x-amz-meta-org"] == "org-1"
+    assert request.headers["content-length"] == "64"
+    assert "transfer-encoding" not in request.headers
+    assert request.content == b"KNF1" + b"\x00" * 60
+
+
+@respx.mock
+def test_upload_ciphertext_streams_iterable_with_content_length(client):
+    route = respx.put(UPLOAD_URL).mock(return_value=httpx.Response(200))
+    parts = [b"KNF1" + b"\x00" * 12, b"a" * 40, b"b" * 8]
+    client.upload_ciphertext(FileUpload(**files_json()), iter(parts), ciphertext_size=64)
+
+    request = route.calls.last.request
+    assert request.headers["content-length"] == "64"
+    assert "transfer-encoding" not in request.headers
+    assert "authorization" not in request.headers
+    assert request.read() == b"".join(parts)
+
+
+def test_upload_ciphertext_iterable_requires_size(client):
+    with pytest.raises(ValueError, match="ciphertext_size is required"):
+        client.upload_ciphertext(FileUpload(**files_json()), iter([b"x"]))
+
+
+def test_upload_ciphertext_size_mismatch_for_bytes(client):
+    with pytest.raises(ValueError, match="does not match"):
+        client.upload_ciphertext(FileUpload(**files_json()), b"x" * 64, ciphertext_size=65)
+
+
+@respx.mock
+def test_upload_ciphertext_iterable_size_mismatch(client):
+    respx.put(UPLOAD_URL).mock(return_value=httpx.Response(200))
+    with pytest.raises(knf.KnfError, match="declared 64"):
+        client.upload_ciphertext(FileUpload(**files_json()), iter([b"x" * 10]), ciphertext_size=64)
+
+
+def test_upload_ciphertext_conflicting_content_length_header(client):
+    upload = FileUpload(**{**files_json(), "upload_headers": {"Content-Length": "10"}})
+    with pytest.raises(ValueError, match="Content-Length"):
+        client.upload_ciphertext(upload, b"x" * 64)
+
+
+@respx.mock
+def test_upload_ciphertext_failure(client):
+    respx.put(UPLOAD_URL).mock(return_value=httpx.Response(403, text="SignatureDoesNotMatch"))
+    with pytest.raises(KonfidantApiError) as exc_info:
+        client.upload_ciphertext(FileUpload(**files_json()), b"x" * 64)
+    assert exc_info.value.status_code == 403
+    assert "file upload failed" in str(exc_info.value)
+    assert exc_info.value.body == "SignatureDoesNotMatch"
+
+
+@respx.mock
+def test_complete_file_upload(client):
+    route = respx.post(f"{BASE_URL}/api/v1/files/abc123.knf/complete").mock(
+        return_value=httpx.Response(201, json=complete_json())
+    )
+    completed = client.complete_file_upload("abc123.knf")
+
+    request = route.calls.last.request
+    assert request.headers["authorization"] == "Bearer test-key"
+    assert request.content == b""
+    assert completed == CompletedFileUpload(
+        download_url=DOWNLOAD_URL, file_id="file-1", expires_at="2026-10-05T00:00:00.000Z", verified_burn=True
+    )
+
+
+@respx.mock
+def test_complete_file_upload_url_encodes_file_key(client):
+    route = respx.post(f"{BASE_URL}/api/v1/files/org%2Fhas%20space.knf/complete").mock(
+        return_value=httpx.Response(201, json={**complete_json(False), "file_id": None})
+    )
+    completed = client.complete_file_upload("org/has space.knf")
+    assert route.called
+    assert completed.file_id is None
+    assert completed.verified_burn is False
+
+
+@respx.mock
+def test_complete_file_upload_409_upload_incomplete(client):
+    respx.post(f"{BASE_URL}/api/v1/files/abc123.knf/complete").mock(
+        return_value=httpx.Response(409, json={"error": "upload_incomplete"})
+    )
+    with pytest.raises(KonfidantApiError) as exc_info:
+        client.complete_file_upload("abc123.knf")
+    assert exc_info.value.status_code == 409
+    assert str(exc_info.value) == "upload_incomplete"
 
 
 # ---------------------------------------------------------------------------
@@ -159,112 +312,208 @@ def test_share_text_fallback_message_on_non_json(client):
 # ---------------------------------------------------------------------------
 
 
-@respx.mock
-def test_share_file_success(client):
-    route = respx.post(f"{BASE_URL}/api/v1/files").mock(
-        return_value=httpx.Response(202, json=presigned_json())
+def mock_file_flow(verified_burn: bool = True):
+    create = respx.post(f"{BASE_URL}/api/v1/files").mock(return_value=httpx.Response(201, json=files_json()))
+    put = respx.put(UPLOAD_URL).mock(return_value=httpx.Response(200))
+    complete = respx.post(f"{BASE_URL}/api/v1/files/abc123.knf/complete").mock(
+        return_value=httpx.Response(201, json=complete_json(verified_burn))
     )
-    result = client.share_file(filename="doc.pdf", file_size=1024, ttl_hours=48)
-
-    assert route.called
-    assert result.file_key == "abc123.zip"
-    assert result.upload_url == "http://s3.test/upload"
-    assert result.metadata_headers.user_id == "user-1"
-    assert result.metadata_headers.ttl_hours == "48"
-    assert result.metadata_headers.organization_id == "org-1"
+    return create, put, complete
 
 
+@pytest.mark.parametrize("as_stream", [False, True])
 @respx.mock
-def test_share_file_sends_correct_body(client):
-    respx.post(f"{BASE_URL}/api/v1/files").mock(
-        return_value=httpx.Response(202, json=presigned_json())
-    )
-    client.share_file(filename="doc.pdf", file_size=1024, ttl_hours=48)
-    import json
-    body = json.loads(respx.calls.last.request.content)
-    assert body == {"filename": "doc.pdf", "file_size": 1024, "ttl_hours": 48}
+def test_share_file_end_to_end(client, as_stream):
+    content = bytes(range(256)) * 9000  # > 2 default chunks
+    create, put, complete = mock_file_flow()
+    data = io.BytesIO(content) if as_stream else content
 
+    result = client.share_file(data, "report.pdf", content_type="application/pdf", ttl_hours=48)
 
-@respx.mock
-def test_share_file_unauthorized(client):
-    respx.post(f"{BASE_URL}/api/v1/files").mock(
-        return_value=httpx.Response(401, json={"error": "Unauthorized"})
-    )
-    with pytest.raises(KonfidantApiError) as exc_info:
-        client.share_file(filename="x", file_size=1, ttl_hours=1)
-    assert exc_info.value.status_code == 401
+    create_body = json.loads(create.calls.last.request.content)
+    meta_length = len(knf.encode_metadata("file", "report.pdf", "application/pdf"))
+    expected_size = knf.ciphertext_size(meta_length, len(content))
+    assert create_body == {"ciphertext_size": expected_size, "ttl_hours": 48}
+    assert "filename" not in create_body and "file_size" not in create_body
 
+    put_request = put.calls.last.request
+    uploaded = put_request.read()
+    assert "authorization" not in put_request.headers
+    assert put_request.headers["content-length"] == str(expected_size)
+    assert put_request.headers["content-type"] == "application/octet-stream"
+    assert len(uploaded) == expected_size
+    assert b"report.pdf" not in uploaded
+    assert complete.called
 
-# ---------------------------------------------------------------------------
-# get_file_status
-# ---------------------------------------------------------------------------
-
-
-@respx.mock
-def test_get_file_status_processing(client):
-    respx.get(f"{BASE_URL}/api/v1/files/abc123.zip/status").mock(
-        return_value=httpx.Response(
-            202, json={"status": "processing", "message": "Encryption in progress"}
-        )
-    )
-    result = client.get_file_status("abc123.zip")
-    assert result.status == "processing"
-    assert result.message == "Encryption in progress"
-
-
-@respx.mock
-def test_get_file_status_complete(client):
-    complete = {
-        "status": "complete",
-        "file_id": "file-1",
-        "file_name": "doc.pdf",
-        "share_url": "https://download.konfidant.app?t=tok",
-        "expires_at": "2026-06-01 00:00:00",
-        "verified_burn": True,
-    }
-    respx.get(f"{BASE_URL}/api/v1/files/abc123.zip/status").mock(
-        return_value=httpx.Response(200, json=complete)
-    )
-    result = client.get_file_status("abc123.zip")
-    assert result.status == "complete"
+    assert isinstance(result, ShareFileResult)
     assert result.file_id == "file-1"
     assert result.verified_burn is True
+    assert result.expires_at == "2026-10-05T00:00:00.000Z"
+    assert result.share_url.startswith(DOWNLOAD_URL + "&k=")
+
+    decrypted = knf.decrypt(key_from_share_url(result.share_url), uploaded)
+    assert (decrypted.kind, decrypted.name, decrypted.mime) == ("file", "report.pdf", "application/pdf")
+    assert decrypted.data == content
 
 
 @respx.mock
-def test_get_file_status_url_encodes_file_key(client):
-    route = respx.get(f"{BASE_URL}/api/v1/files/has%20spaces.zip/status").mock(
-        return_value=httpx.Response(
-            200,
-            json={"status": "complete", "file_id": "x", "file_name": "x", "share_url": "x", "expires_at": "x"},
-        )
+def test_share_file_from_current_position_of_file_object(client):
+    _, put, _ = mock_file_flow()
+    stream = io.BytesIO(b"HEADERpayload")
+    stream.read(6)
+    result = client.share_file(stream, "p.bin")
+    decrypted = knf.decrypt(key_from_share_url(result.share_url), put.calls.last.request.read())
+    assert decrypted.data == b"payload"
+    assert decrypted.mime == ""
+
+
+@respx.mock
+def test_share_file_non_seekable_stream(client):
+    class Pipe(io.RawIOBase):
+        def __init__(self, data: bytes) -> None:
+            self._data = io.BytesIO(data)
+
+        def readable(self) -> bool:
+            return True
+
+        def readinto(self, buffer) -> int:  # type: ignore[no-untyped-def]
+            chunk = self._data.read(min(len(buffer), 1000))
+            buffer[: len(chunk)] = chunk
+            return len(chunk)
+
+    content = b"z" * 5000
+    create, put, _ = mock_file_flow()
+    result = client.share_file(Pipe(content), "pipe.txt", "text/plain")  # type: ignore[arg-type]
+    meta_length = len(knf.encode_metadata("file", "pipe.txt", "text/plain"))
+    assert json.loads(create.calls.last.request.content)["ciphertext_size"] == knf.ciphertext_size(
+        meta_length, len(content)
     )
-    client.get_file_status("has spaces.zip")
+    decrypted = knf.decrypt(key_from_share_url(result.share_url), put.calls.last.request.read())
+    assert decrypted.data == content
+
+
+@respx.mock
+def test_share_file_empty_file(client):
+    _, put, _ = mock_file_flow(verified_burn=False)
+    result = client.share_file(b"", "empty.txt")
+    assert result.verified_burn is False
+    assert knf.decrypt(key_from_share_url(result.share_url), put.calls.last.request.read()).data == b""
+
+
+@respx.mock
+def test_share_file_stops_on_upload_failure(client):
+    respx.post(f"{BASE_URL}/api/v1/files").mock(return_value=httpx.Response(201, json=files_json()))
+    respx.put(UPLOAD_URL).mock(return_value=httpx.Response(500, text="boom"))
+    complete = respx.post(f"{BASE_URL}/api/v1/files/abc123.knf/complete")
+    with pytest.raises(KonfidantApiError) as exc_info:
+        client.share_file(b"data", "a.txt")
+    assert exc_info.value.status_code == 500
+    assert not complete.called
+
+
+@respx.mock
+def test_share_file_surfaces_409(client):
+    respx.post(f"{BASE_URL}/api/v1/files").mock(return_value=httpx.Response(201, json=files_json()))
+    respx.put(UPLOAD_URL).mock(return_value=httpx.Response(200))
+    respx.post(f"{BASE_URL}/api/v1/files/abc123.knf/complete").mock(
+        return_value=httpx.Response(409, json={"error": "upload_incomplete"})
+    )
+    with pytest.raises(KonfidantApiError) as exc_info:
+        client.share_file(b"data", "a.txt")
+    assert exc_info.value.status_code == 409
+
+
+def test_share_file_validates_metadata_before_network(client):
+    with respx.mock(assert_all_called=False) as router:
+        route = router.post(f"{BASE_URL}/api/v1/files")
+        with pytest.raises(knf.KnfError, match="File name exceeds"):
+            client.share_file(b"x", "n" * 1025)
+        with pytest.raises(knf.KnfError, match="MIME type exceeds"):
+            client.share_file(b"x", "a", content_type="m" * 256)
+        with pytest.raises(ValueError, match="filename is required"):
+            client.share_file(b"x", "")
+        assert not route.called
+
+
+# ---------------------------------------------------------------------------
+# open_share
+# ---------------------------------------------------------------------------
+
+
+KEY = bytes(range(32))
+
+
+def share_url_for(key: bytes = KEY) -> str:
+    return knf.build_share_url(DOWNLOAD_URL, key)
+
+
+@respx.mock
+def test_open_share_text(client):
+    ciphertext = knf.encrypt_text(KEY, "hello there")
+    route = respx.post(f"{DOWNLOAD_HOST}/api/download").mock(
+        return_value=httpx.Response(200, content=ciphertext, headers={"content-type": "application/octet-stream"})
+    )
+    opened = client.open_share(share_url_for())
+
+    request = route.calls.last.request
+    assert json.loads(request.content) == {"t": TOKEN}
+    assert "authorization" not in request.headers
+    assert knf.encode_key(KEY) not in request.content.decode()
+    assert opened == OpenedShare(kind="text", name="", mime="", data=b"hello there", text="hello there")
+
+
+@respx.mock
+def test_open_share_file_multi_chunk(client):
+    content = bytes(range(256)) * 50
+    ciphertext = knf.encrypt(KEY, content, kind="file", name="doc.pdf", mime="application/pdf", chunk_size=4096)
+    respx.post(f"{DOWNLOAD_HOST}/api/download").mock(return_value=httpx.Response(200, content=ciphertext))
+    opened = client.open_share(share_url_for())
+    assert (opened.kind, opened.name, opened.mime, opened.text) == ("file", "doc.pdf", "application/pdf", None)
+    assert opened.data == content
+
+
+@respx.mock
+def test_open_share_uses_link_origin_not_base_url(client):
+    ciphertext = knf.encrypt_text(KEY, "x")
+    route = respx.post("https://files.customer.example/api/download").mock(
+        return_value=httpx.Response(200, content=ciphertext)
+    )
+    client.open_share(knf.build_share_url("https://files.customer.example/#t=abc", KEY))
     assert route.called
 
 
 @respx.mock
-def test_get_file_status_not_found(client):
-    respx.get(f"{BASE_URL}/api/v1/files/nope/status").mock(
-        return_value=httpx.Response(404, json={"error": "File not found"})
+def test_open_share_410(client):
+    respx.post(f"{DOWNLOAD_HOST}/api/download").mock(
+        return_value=httpx.Response(410, json={"error": "gone", "message": "This link was already used."})
     )
     with pytest.raises(KonfidantApiError) as exc_info:
-        client.get_file_status("nope")
-    assert exc_info.value.status_code == 404
+        client.open_share(share_url_for())
+    assert exc_info.value.status_code == 410
+    assert str(exc_info.value) == "gone"
 
 
 @respx.mock
-def test_get_file_status_processing_fields_are_none(client):
-    respx.get(f"{BASE_URL}/api/v1/files/abc123.zip/status").mock(
-        return_value=httpx.Response(
-            202, json={"status": "processing", "message": "Encryption in progress"}
-        )
+def test_open_share_wrong_key(client):
+    ciphertext = knf.encrypt_text(KEY, "secret")
+    respx.post(f"{DOWNLOAD_HOST}/api/download").mock(return_value=httpx.Response(200, content=ciphertext))
+    with pytest.raises(knf.KnfError, match="Decryption failed"):
+        client.open_share(share_url_for(bytes(32)))
+
+
+@respx.mock
+def test_open_share_truncated_download(client):
+    ciphertext = knf.encrypt(KEY, b"y" * 10_000, kind="file", name="a", chunk_size=4096)
+    respx.post(f"{DOWNLOAD_HOST}/api/download").mock(
+        return_value=httpx.Response(200, content=ciphertext[: knf.HEADER_SIZE + 4096 + knf.TAG_SIZE])
     )
-    result = client.get_file_status("abc123.zip")
-    assert result.file_id is None
-    assert result.file_name is None
-    assert result.share_url is None
-    assert result.expires_at is None
+    with pytest.raises(knf.KnfError, match="Decryption failed"):
+        client.open_share(share_url_for())
+
+
+def test_open_share_rejects_link_without_key(client):
+    with pytest.raises(knf.KnfError, match="missing the token or key"):
+        client.open_share(DOWNLOAD_URL)
 
 
 # ---------------------------------------------------------------------------
@@ -272,299 +521,83 @@ def test_get_file_status_processing_fields_are_none(client):
 # ---------------------------------------------------------------------------
 
 
+def make_shares_body(**pagination_overrides) -> dict:
+    pagination = {"total": 0, "limit": 20, "offset": 0, "has_more": False, **pagination_overrides}
+    return {"shares": [], "pagination": pagination}
+
+
 @respx.mock
 def test_list_shares_no_params(client):
-    empty = {"shares": [], "pagination": {"total": 0, "limit": 50, "offset": 0, "has_more": False}}
-    route = respx.get(f"{BASE_URL}/api/v1/shares").mock(
-        return_value=httpx.Response(200, json=empty)
-    )
+    route = respx.get(f"{BASE_URL}/api/v1/shares").mock(return_value=httpx.Response(200, json=make_shares_body()))
     result = client.list_shares()
     assert route.called
+    assert route.calls.last.request.url.query == b""
+    assert route.calls.last.request.headers["authorization"] == "Bearer test-key"
     assert isinstance(result, ListSharesResponse)
-    assert result.shares == []
-    assert "?" not in str(route.calls.last.request.url)
 
 
 @respx.mock
 def test_list_shares_with_all_params(client):
-    empty = {"shares": [], "pagination": {"total": 0, "limit": 10, "offset": 20, "has_more": False}}
-    route = respx.get(f"{BASE_URL}/api/v1/shares").mock(
-        return_value=httpx.Response(200, json=empty)
-    )
+    route = respx.get(f"{BASE_URL}/api/v1/shares").mock(return_value=httpx.Response(200, json=make_shares_body()))
     client.list_shares(type="file", status="active", limit=10, offset=20)
-    url = str(route.calls.last.request.url)
-    assert "type=file" in url
-    assert "status=active" in url
-    assert "limit=10" in url
-    assert "offset=20" in url
+    params = dict(route.calls.last.request.url.params)
+    assert params == {"type": "file", "status": "active", "limit": "10", "offset": "20"}
 
 
 @respx.mock
-def test_list_shares_omits_absent_params(client):
-    empty = {"shares": [], "pagination": {"total": 0, "limit": 50, "offset": 0, "has_more": False}}
-    route = respx.get(f"{BASE_URL}/api/v1/shares").mock(
-        return_value=httpx.Response(200, json=empty)
-    )
-    client.list_shares(type="text")
-    url = str(route.calls.last.request.url)
-    assert "type=text" in url
-    assert "status" not in url
-    assert "limit" not in url
-    assert "offset" not in url
-
-
-@respx.mock
-def test_list_shares_returns_shares_and_pagination(client):
+def test_list_shares_returns_shares_without_file_name(client):
     body = {
         "shares": [
             {
                 "type": "file",
-                "file_name": "doc.pdf",
-                "file_size_bytes": 1024,
-                "created_at": "2026-05-01T00:00:00.000Z",
-                "expires_at": "2026-05-08T00:00:00.000Z",
+                "file_size_bytes": 2048,
+                "created_at": "2026-10-01T00:00:00.000Z",
+                "expires_at": "2026-10-02T00:00:00.000Z",
                 "accessed_at": None,
-                "created_by": "user@example.com",
-            }
+                "created_by": "dev@example.com",
+            },
+            {
+                "type": "text",
+                "file_size_bytes": None,
+                "created_at": "2026-10-01T00:00:00.000Z",
+                "expires_at": "2026-10-02T00:00:00.000Z",
+                "accessed_at": "2026-10-01T01:00:00.000Z",
+                "created_by": None,
+            },
         ],
-        "pagination": {"total": 1, "limit": 50, "offset": 0, "has_more": False},
+        "pagination": {"total": 2, "limit": 20, "offset": 0, "has_more": False},
     }
     respx.get(f"{BASE_URL}/api/v1/shares").mock(return_value=httpx.Response(200, json=body))
-
     result = client.list_shares()
 
-    assert len(result.shares) == 1
-    assert result.shares[0].file_name == "doc.pdf"
-    assert result.shares[0].accessed_at is None
-    assert result.pagination.total == 1
-    assert result.pagination.has_more is False
+    assert len(result.shares) == 2
+    first, second = result.shares
+    assert not hasattr(first, "file_name")
+    assert (first.type, first.file_size_bytes, first.accessed_at, first.created_by) == (
+        "file",
+        2048,
+        None,
+        "dev@example.com",
+    )
+    assert (second.type, second.accessed_at, second.created_by) == ("text", "2026-10-01T01:00:00.000Z", None)
+    assert result.pagination.total == 2
 
 
 @respx.mock
 def test_list_shares_has_more_pagination(client):
-    body = {
-        "shares": [],
-        "pagination": {"total": 100, "limit": 10, "offset": 0, "has_more": True},
-    }
-    respx.get(f"{BASE_URL}/api/v1/shares").mock(return_value=httpx.Response(200, json=body))
-
-    result = client.list_shares(limit=10)
-
-    assert result.pagination.has_more is True
-    assert result.pagination.total == 100
-
-
-@respx.mock
-def test_list_shares_forbidden(client):
     respx.get(f"{BASE_URL}/api/v1/shares").mock(
-        return_value=httpx.Response(
-            403,
-            json={
-                "error": "Insufficient permissions",
-                "required_scope": "shares:list",
-                "available_scopes": ["files:create"],
-            },
-        )
+        return_value=httpx.Response(200, json=make_shares_body(total=50, limit=10, offset=0, has_more=True))
     )
-    with pytest.raises(KonfidantApiError) as exc_info:
-        client.list_shares()
-    assert exc_info.value.status_code == 403
-    assert "Insufficient permissions" in str(exc_info.value)
+    result = client.list_shares(limit=10)
+    assert result.pagination.has_more is True
+    assert result.pagination.total == 50
 
 
 # ---------------------------------------------------------------------------
-# upload_file
+# Removed API surface
 # ---------------------------------------------------------------------------
 
 
-@respx.mock
-def test_upload_file_put_with_correct_headers(client):
-    route = respx.put("http://s3.test/upload").mock(return_value=httpx.Response(200))
-    presigned = make_presigned()
-
-    client.upload_file(
-        data=b"hello",
-        size=5,
-        content_type="text/plain",
-        presigned=presigned,
-    )
-
-    assert route.called
-    req = route.calls.last.request
-    assert req.method == "PUT"
-    assert req.headers["Content-Type"] == "text/plain"
-    assert req.headers["x-amz-meta-organization-id"] == "org-1"
-    assert req.headers["x-amz-meta-ttl-hours"] == "48"
-    assert req.headers["x-amz-meta-user-id"] == "user-1"
-    assert req.content == b"hello"
-
-
-@respx.mock
-def test_upload_file_no_auth_header_sent_to_s3(client):
-    route = respx.put("http://s3.test/upload").mock(return_value=httpx.Response(200))
-    client.upload_file(data=b"x", size=1, content_type="text/plain", presigned=make_presigned())
-
-    req = route.calls.last.request
-    assert "authorization" not in {k.lower() for k in req.headers}
-
-
-@respx.mock
-def test_upload_file_accepts_file_like_object(client):
-    route = respx.put("http://s3.test/upload").mock(return_value=httpx.Response(200))
-    client.upload_file(
-        data=io.BytesIO(b"hello"),
-        size=5,
-        content_type="text/plain",
-        presigned=make_presigned(),
-    )
-    assert route.called
-
-
-@respx.mock
-def test_upload_file_s3_error(client):
-    respx.put("http://s3.test/upload").mock(return_value=httpx.Response(403, text="AccessDenied"))
-    with pytest.raises(KonfidantApiError) as exc_info:
-        client.upload_file(data=b"x", size=1, content_type="text/plain", presigned=make_presigned())
-    assert exc_info.value.status_code == 403
-    assert "file upload failed" in str(exc_info.value)
-
-
-# ---------------------------------------------------------------------------
-# share_and_upload_file
-# ---------------------------------------------------------------------------
-
-
-@respx.mock
-def test_share_and_upload_file_success(client):
-    processing = {"status": "processing", "message": "Encryption in progress"}
-    complete = {
-        "status": "complete",
-        "file_id": "file-1",
-        "file_name": "doc.pdf",
-        "share_url": "https://download.konfidant.app?t=tok",
-        "expires_at": "2026-06-01 00:00:00",
-        "verified_burn": True,
-    }
-
-    respx.post(f"{BASE_URL}/api/v1/files").mock(
-        return_value=httpx.Response(202, json=presigned_json())
-    )
-    respx.put("http://s3.test/upload").mock(return_value=httpx.Response(200))
-    status_route = respx.get(f"{BASE_URL}/api/v1/files/abc123.zip/status").mock(
-        side_effect=[
-            httpx.Response(202, json=processing),
-            httpx.Response(200, json=complete),
-        ]
-    )
-
-    result = client.share_and_upload_file(
-        data=b"data",
-        size=4,
-        filename="doc.pdf",
-        content_type="application/pdf",
-        ttl_hours=48,
-        poll_interval=0.01,
-        timeout=5.0,
-    )
-
-    assert isinstance(result, ShareResult)
-    assert result.share_url == "https://download.konfidant.app?t=tok"
-    assert result.file_id == "file-1"
-    assert result.verified_burn is True
-    assert status_route.call_count == 2
-
-
-@respx.mock
-def test_share_and_upload_file_timeout(client):
-    processing = {"status": "processing", "message": "Encryption in progress"}
-
-    respx.post(f"{BASE_URL}/api/v1/files").mock(
-        return_value=httpx.Response(202, json=presigned_json())
-    )
-    respx.put("http://s3.test/upload").mock(return_value=httpx.Response(200))
-    respx.get(f"{BASE_URL}/api/v1/files/abc123.zip/status").mock(
-        return_value=httpx.Response(202, json=processing)
-    )
-
-    with pytest.raises(TimeoutError, match="timed out"):
-        client.share_and_upload_file(
-            data=b"data",
-            size=4,
-            filename="doc.pdf",
-            content_type="application/pdf",
-            ttl_hours=48,
-            poll_interval=0.01,
-            timeout=0.05,
-        )
-
-
-@respx.mock
-def test_share_and_upload_file_propagates_share_file_error(client):
-    respx.post(f"{BASE_URL}/api/v1/files").mock(
-        return_value=httpx.Response(401, json={"error": "Unauthorized"})
-    )
-    with pytest.raises(KonfidantApiError) as exc_info:
-        client.share_and_upload_file(
-            data=b"data", size=4, filename="doc.pdf", content_type="application/pdf", ttl_hours=48
-        )
-    assert exc_info.value.status_code == 401
-
-
-@respx.mock
-def test_share_and_upload_file_propagates_upload_error(client):
-    respx.post(f"{BASE_URL}/api/v1/files").mock(
-        return_value=httpx.Response(202, json=presigned_json())
-    )
-    respx.put("http://s3.test/upload").mock(return_value=httpx.Response(403, text="AccessDenied"))
-    with pytest.raises(KonfidantApiError) as exc_info:
-        client.share_and_upload_file(
-            data=b"data", size=4, filename="doc.pdf", content_type="application/pdf", ttl_hours=48
-        )
-    assert exc_info.value.status_code == 403
-
-
-@respx.mock
-def test_share_and_upload_file_propagates_status_error(client):
-    respx.post(f"{BASE_URL}/api/v1/files").mock(
-        return_value=httpx.Response(202, json=presigned_json())
-    )
-    respx.put("http://s3.test/upload").mock(return_value=httpx.Response(200))
-    respx.get(f"{BASE_URL}/api/v1/files/abc123.zip/status").mock(
-        return_value=httpx.Response(500, json={"error": "Internal Server Error"})
-    )
-    with pytest.raises(KonfidantApiError) as exc_info:
-        client.share_and_upload_file(
-            data=b"data",
-            size=4,
-            filename="doc.pdf",
-            content_type="application/pdf",
-            ttl_hours=48,
-            timeout=5.0,
-        )
-    assert exc_info.value.status_code == 500
-
-
-# ---------------------------------------------------------------------------
-# KonfidantApiError
-# ---------------------------------------------------------------------------
-
-
-def test_api_error_fields():
-    err = KonfidantApiError("Unauthorized", 401, {"error": "Unauthorized"})
-    assert err.status_code == 401
-    assert err.body == {"error": "Unauthorized"}
-    assert str(err) == "Unauthorized"
-    assert isinstance(err, Exception)
-
-
-@respx.mock
-def test_api_error_carries_body(client):
-    respx.post(f"{BASE_URL}/api/v1/texts").mock(
-        return_value=httpx.Response(401, json={"error": "Missing or invalid Authorization header."})
-    )
-    with pytest.raises(KonfidantApiError) as exc_info:
-        client.share_text(text="x", ttl_hours=1)
-    err = exc_info.value
-    assert err.status_code == 401
-    assert isinstance(err.body, dict)
-    assert err.body["error"] == "Missing or invalid Authorization header."
+@pytest.mark.parametrize("name", ["share_and_upload_file", "get_file_status", "upload_file"])
+def test_obsolete_methods_removed(name):
+    assert not hasattr(KonfidantClient, name)

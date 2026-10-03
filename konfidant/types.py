@@ -1,53 +1,64 @@
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Literal
 
 
-@dataclass
-class FileMetadataHeaders:
-    user_id: str
-    ttl_hours: str
-    organization_id: str
-
-
-@dataclass
-class ShareTextResponse:
-    text_id: str
+@dataclass(frozen=True)
+class ShareTextResult:
     share_url: str
+    """Link to send to the recipient. Carries the single-use token and the decryption key in its fragment."""
+    text_id: str | None
+    expires_at: str
+
+
+@dataclass(frozen=True)
+class FileUpload:
+    upload_url: str
+    file_key: str
+    upload_headers: dict[str, str] = field(default_factory=dict)
+    upload_expires_in: int = 0
+
+
+@dataclass(frozen=True)
+class CompletedFileUpload:
+    download_url: str
+    """Server-issued link carrying only ``#t=<token>``. Append the key with ``knf.build_share_url``."""
+    file_id: str | None
     expires_at: str
     verified_burn: bool
 
 
-@dataclass
-class ShareFileResponse:
-    upload_url: str
-    file_key: str
-    metadata_headers: FileMetadataHeaders
-    poll_url: str
+@dataclass(frozen=True)
+class ShareFileResult:
+    share_url: str
+    """Link to send to the recipient. Carries the single-use token and the decryption key in its fragment."""
+    file_id: str | None
+    expires_at: str
+    verified_burn: bool
 
 
-@dataclass
-class FileStatusResponse:
-    status: str  # "processing" or "complete"
-    message: Optional[str] = None
-    file_id: Optional[str] = None
-    file_name: Optional[str] = None
-    share_url: Optional[str] = None
-    expires_at: Optional[str] = None
-    verified_burn: Optional[bool] = None
+@dataclass(frozen=True)
+class OpenedShare:
+    kind: Literal["text", "file"]
+    name: str
+    """Original file name (empty for text shares)."""
+    mime: str
+    """MIME type (empty for text shares; may be empty for files)."""
+    data: bytes
+    text: str | None
+    """Decoded text for text shares, ``None`` for file shares."""
 
 
-@dataclass
+@dataclass(frozen=True)
 class Share:
     type: str
-    file_name: str
-    file_size_bytes: int
+    file_size_bytes: int | None
     created_at: str
     expires_at: str
-    accessed_at: Optional[str]
-    created_by: str
+    accessed_at: str | None
+    created_by: str | None
 
 
-@dataclass
+@dataclass(frozen=True)
 class Pagination:
     total: int
     limit: int
@@ -55,15 +66,7 @@ class Pagination:
     has_more: bool
 
 
-@dataclass
+@dataclass(frozen=True)
 class ListSharesResponse:
     shares: list[Share]
     pagination: Pagination
-
-
-@dataclass
-class ShareResult:
-    share_url: str
-    file_id: str
-    expires_at: str
-    verified_burn: bool

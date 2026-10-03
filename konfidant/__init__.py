@@ -1,25 +1,32 @@
+from . import knf
 from .client import KonfidantClient
 from .errors import KonfidantApiError
+from .knf import KnfError
 from .types import (
-    FileMetadataHeaders,
-    FileStatusResponse,
+    CompletedFileUpload,
+    FileUpload,
     ListSharesResponse,
+    OpenedShare,
     Pagination,
     Share,
-    ShareFileResponse,
-    ShareResult,
-    ShareTextResponse,
+    ShareFileResult,
+    ShareTextResult,
 )
 
+__version__ = "1.0.0"
+
 __all__ = [
-    "KonfidantClient",
+    "CompletedFileUpload",
+    "FileUpload",
+    "KnfError",
     "KonfidantApiError",
-    "FileMetadataHeaders",
-    "FileStatusResponse",
+    "KonfidantClient",
     "ListSharesResponse",
+    "OpenedShare",
     "Pagination",
     "Share",
-    "ShareFileResponse",
-    "ShareResult",
-    "ShareTextResponse",
+    "ShareFileResult",
+    "ShareTextResult",
+    "__version__",
+    "knf",
 ]
