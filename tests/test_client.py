@@ -201,7 +201,7 @@ def test_create_file_upload_rejects_impossible_size(client):
 @respx.mock
 def test_create_file_upload_error(client):
     respx.post(f"{BASE_URL}/api/v1/files").mock(
-        return_value=httpx.Response(413, json={"error": "file_too_large", "message": "Max 80 MB"})
+        return_value=httpx.Response(413, json={"error": "file_too_large", "message": "Max 100 MB"})
     )
     with pytest.raises(KonfidantApiError) as exc_info:
         client.create_file_upload(10**10)
