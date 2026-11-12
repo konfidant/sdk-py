@@ -1,0 +1,14 @@
+tests/test_client.py
+  h_8f86904f171102 204
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ff778705acdfb301cd29df77cf481acb15e1c456",
+  "prompts": {},
+  "humans": {
+    "h_8f86904f171102": {
+      "author": "msdundar <msdundars@gmail.com>"
+    }
+  }
+}
