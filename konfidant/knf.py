@@ -16,7 +16,6 @@ Layout (see the KNF1 specification)::
 from __future__ import annotations
 
 import base64
-import binascii
 import io
 import math
 import os
@@ -96,7 +95,7 @@ def decode_key(encoded: str) -> bytes:
         raise KnfError("Invalid key encoding")
     try:
         key = base64.urlsafe_b64decode(encoded + "=")
-    except (binascii.Error, ValueError) as exc:
+    except ValueError as exc:
         raise KnfError("Invalid key encoding") from exc
     if len(key) != KEY_SIZE:
         raise KnfError("Invalid key length")

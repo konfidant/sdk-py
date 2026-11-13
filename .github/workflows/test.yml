@@ -21,7 +21,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: pip install poetry && poetry install --with dev
+        env:
+          POETRY_INSTALLER_ONLY_BINARY: ":all:"
+        run: |
+          pip install --only-binary :all: --require-hashes -r .github/requirements/poetry.txt
+          poetry install --with dev
 
       - name: Run tests
         run: poetry run pytest tests/ -v --cov=konfidant --cov-report=xml

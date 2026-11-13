@@ -23,7 +23,7 @@ jobs:
 
       - name: Build package
         run: |
-          pip install build
+          pip install --only-binary :all: --require-hashes -r .github/requirements/build.txt
           python -m build
 
       - name: Create GitHub Release
