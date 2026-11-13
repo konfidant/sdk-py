@@ -3,6 +3,7 @@
 [![Test](https://github.com/konfidant/sdk-py/actions/workflows/test.yml/badge.svg)](https://github.com/konfidant/sdk-py/actions/workflows/test.yml)
 [![Codacy Badge](https://app.codacy.com/project/badge/Grade/f4489c7a56e0492ab94abd7470114ef6)](https://app.codacy.com/gh/konfidant/sdk-py/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 [![Codacy Badge](https://app.codacy.com/project/badge/Coverage/f4489c7a56e0492ab94abd7470114ef6)](https://app.codacy.com/gh/konfidant/sdk-py/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_coverage)
+[![Quality gate status](https://sonarcloud.io/api/project_badges/measure?project=konfidant_sdk-py&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=konfidant_sdk-py)
 
 Python SDK for the [Konfidant](https://www.konfidant.app?utm_source=github&utm_medium=pythonsdk&utm_campaign=github) API. Share text and files through single-use,
 time-limited links that are **encrypted on your machine** before anything is sent.
