@@ -1,0 +1,37 @@
+.github/requirements/build.in
+  s_ef3b7cc3396fee::t_17df81f6cdb00c 1
+.github/requirements/build.txt
+  s_ef3b7cc3396fee::t_17df81f6cdb00c 1-18
+.github/requirements/poetry.txt
+  s_ef3b7cc3396fee::t_17df81f6cdb00c 1-982
+tests/test_knf.py
+  s_ef3b7cc3396fee::t_ec0cd9f2113d6b 169,171,178,180,186,188,329-331
+.github/workflows/test.yml
+  s_ef3b7cc3396fee::t_fb905af2736d19 24-28
+konfidant/knf.py
+  s_ef3b7cc3396fee::t_ec0cd9f2113d6b 98
+.github/requirements/poetry.in
+  s_ef3b7cc3396fee::t_17df81f6cdb00c 1
+tests/test_client.py
+  s_ef3b7cc3396fee::t_6beaab729dea80 243-244,246,250,252,273,275
+  s_ef3b7cc3396fee::t_b09ba9a130e8d3 146-148
+  s_ef3b7cc3396fee::t_ec0cd9f2113d6b 258-259,261,508,510,519,521
+.github/workflows/publish.yml
+  s_ef3b7cc3396fee::t_fb905af2736d19 26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6e8e788dc22adb6443726765d2fcf50554577681",
+  "prompts": {},
+  "sessions": {
+    "s_ef3b7cc3396fee": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3dbab341-79f9-450c-8509-ef48bd62d206",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "msdundar <msdundars@gmail.com>"
+    }
+  }
+}
