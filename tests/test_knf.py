@@ -166,23 +166,26 @@ def multi_chunk_ciphertext():
 
 
 def test_wrong_key_fails(multi_chunk_ciphertext):
+    wrong_key = bytes(32)
     with pytest.raises(KnfError, match="Decryption failed"):
-        knf.decrypt(bytes(32), multi_chunk_ciphertext)
+        knf.decrypt(wrong_key, multi_chunk_ciphertext)
 
 
 @pytest.mark.parametrize("position", [16, 100, 4096 + 16 + 5, -1])
 def test_flipped_ciphertext_bit_fails(multi_chunk_ciphertext, position):
     tampered = bytearray(multi_chunk_ciphertext)
     tampered[position] ^= 0x01
+    tampered = bytes(tampered)
     with pytest.raises(KnfError, match="Decryption failed"):
-        knf.decrypt(KEY, bytes(tampered))
+        knf.decrypt(KEY, tampered)
 
 
 def test_modified_header_nonce_fails(multi_chunk_ciphertext):
     tampered = bytearray(multi_chunk_ciphertext)
     tampered[9] ^= 0x01  # nonce prefix, authenticated as AAD
+    tampered = bytes(tampered)
     with pytest.raises(KnfError, match="Decryption failed"):
-        knf.decrypt(KEY, bytes(tampered))
+        knf.decrypt(KEY, tampered)
 
 
 def test_truncated_at_chunk_boundary_fails(multi_chunk_ciphertext):
@@ -323,7 +326,9 @@ def test_generate_and_encode_key():
     assert key != knf.generate_key()
     encoded = knf.encode_key(key)
     assert len(encoded) == 43
-    assert "=" not in encoded and "+" not in encoded and "/" not in encoded
+    assert "=" not in encoded
+    assert "+" not in encoded
+    assert "/" not in encoded
     assert knf.decode_key(encoded) == key
 
 

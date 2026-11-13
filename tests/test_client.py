@@ -143,7 +143,9 @@ def test_share_text_uses_fresh_key_per_share(client):
     respx.post(f"{BASE_URL}/api/v1/texts").mock(
         return_value=httpx.Response(201, json={"download_url": DOWNLOAD_URL, "text_id": "t", "expires_at": "x"})
     )
-    assert client.share_text("a").share_url != client.share_text("a").share_url
+    first = client.share_text("a")
+    second = client.share_text("a")
+    assert first.share_url != second.share_url
 
 
 @respx.mock
@@ -238,20 +240,25 @@ def test_upload_ciphertext_streams_iterable_with_content_length(client):
 
 
 def test_upload_ciphertext_iterable_requires_size(client):
+    upload = FileUpload(**files_json())
+    chunks = iter([b"x"])
     with pytest.raises(ValueError, match="ciphertext_size is required"):
-        client.upload_ciphertext(FileUpload(**files_json()), iter([b"x"]))
+        client.upload_ciphertext(upload, chunks)
 
 
 def test_upload_ciphertext_size_mismatch_for_bytes(client):
+    upload = FileUpload(**files_json())
     with pytest.raises(ValueError, match="does not match"):
-        client.upload_ciphertext(FileUpload(**files_json()), b"x" * 64, ciphertext_size=65)
+        client.upload_ciphertext(upload, b"x" * 64, ciphertext_size=65)
 
 
 @respx.mock
 def test_upload_ciphertext_iterable_size_mismatch(client):
     respx.put(UPLOAD_URL).mock(return_value=httpx.Response(200))
+    upload = FileUpload(**files_json())
+    chunks = iter([b"x" * 10])
     with pytest.raises(knf.KnfError, match="declared 64"):
-        client.upload_ciphertext(FileUpload(**files_json()), iter([b"x" * 10]), ciphertext_size=64)
+        client.upload_ciphertext(upload, chunks, ciphertext_size=64)
 
 
 def test_upload_ciphertext_conflicting_content_length_header(client):
@@ -263,8 +270,9 @@ def test_upload_ciphertext_conflicting_content_length_header(client):
 @respx.mock
 def test_upload_ciphertext_failure(client):
     respx.put(UPLOAD_URL).mock(return_value=httpx.Response(403, text="SignatureDoesNotMatch"))
+    upload = FileUpload(**files_json())
     with pytest.raises(KonfidantApiError) as exc_info:
-        client.upload_ciphertext(FileUpload(**files_json()), b"x" * 64)
+        client.upload_ciphertext(upload, b"x" * 64)
     assert exc_info.value.status_code == 403
     assert "file upload failed" in str(exc_info.value)
     assert exc_info.value.body == "SignatureDoesNotMatch"
@@ -497,8 +505,9 @@ def test_open_share_410(client):
 def test_open_share_wrong_key(client):
     ciphertext = knf.encrypt_text(KEY, "secret")
     respx.post(f"{DOWNLOAD_HOST}/api/download").mock(return_value=httpx.Response(200, content=ciphertext))
+    url = share_url_for(bytes(32))
     with pytest.raises(knf.KnfError, match="Decryption failed"):
-        client.open_share(share_url_for(bytes(32)))
+        client.open_share(url)
 
 
 @respx.mock
@@ -507,8 +516,9 @@ def test_open_share_truncated_download(client):
     respx.post(f"{DOWNLOAD_HOST}/api/download").mock(
         return_value=httpx.Response(200, content=ciphertext[: knf.HEADER_SIZE + 4096 + knf.TAG_SIZE])
     )
+    url = share_url_for()
     with pytest.raises(knf.KnfError, match="Decryption failed"):
-        client.open_share(share_url_for())
+        client.open_share(url)
 
 
 def test_open_share_rejects_link_without_key(client):
