@@ -1,0 +1,36 @@
+pyproject.toml
+  h_8f86904f171102 3,27
+konfidant/__init__.py
+  h_8f86904f171102 6,9,12,14,20,23,26,32,34
+.github/dependabot.yml
+  h_8f86904f171102 7-17
+README.md
+  s_9f0c1ddbabf4dc::t_f8f553113dd35a 163-177
+konfidant/client.py
+  s_9f0c1ddbabf4dc::t_bce3bc59f2fdef 11,14,17,19,295-316
+konfidant/types.py
+  s_9f0c1ddbabf4dc::t_2d95374c7c2d73 73-102
+tests/test_client.py
+  s_9f0c1ddbabf4dc::t_8e2181ee3f4f6d 606-646
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dafdcf4ab6246fb074d0db3d329168067b614ed8",
+  "prompts": {},
+  "humans": {
+    "h_8f86904f171102": {
+      "author": "msdundar <msdundars@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_9f0c1ddbabf4dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "52c78c41-6dcd-4df5-8fbe-7b96dfe10f82",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "msdundar <msdundars@gmail.com>"
+    }
+  }
+}
