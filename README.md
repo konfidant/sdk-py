@@ -160,6 +160,21 @@ response.pagination.has_more
 
 File names are not listed: the server never sees them.
 
+### Describe the API key
+
+```python
+info = client.me()
+
+info.organization.id, info.organization.name
+info.api_key.name, info.api_key.environment, info.api_key.scopes
+info.api_key.rate_limit_per_minute
+info.api_key.expires_at       # None if the key never expires
+info.limits.max_ttl_hours     # longest share lifetime the plan allows
+info.limits.max_file_size_mb  # largest file before encryption
+```
+
+`me()` validates a key without creating a share. It needs no scope and does not count as an API share.
+
 ## Encryption module
 
 `konfidant.knf` implements KNF1 and can be used without the client:

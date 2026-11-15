@@ -8,11 +8,15 @@ import httpx
 from . import knf
 from .errors import KonfidantApiError
 from .types import (
+    ApiKeyInfo,
     CompletedFileUpload,
     FileUpload,
+    KeyInfo,
     ListSharesResponse,
     OpenedShare,
+    Organization,
     Pagination,
+    PlanLimits,
     Share,
     ShareFileResult,
     ShareTextResult,
@@ -285,6 +289,28 @@ class KonfidantClient:
                 limit=body["pagination"]["limit"],
                 offset=body["pagination"]["offset"],
                 has_more=body["pagination"]["has_more"],
+            ),
+        )
+
+    def me(self) -> KeyInfo:
+        """Describe the API key: its organization, scopes and rate limit, and the plan's share limits.
+
+        Use it to validate a key without creating a share. Needs no scope and does not count as an API share.
+        """
+        body = self._request("GET", "/api/v1/me")
+        key = body["api_key"]
+        return KeyInfo(
+            organization=Organization(id=body["organization"]["id"], name=body["organization"]["name"]),
+            api_key=ApiKeyInfo(
+                name=key["name"],
+                environment=key["environment"],
+                scopes=list(key["scopes"]),
+                rate_limit_per_minute=key["rate_limit_per_minute"],
+                expires_at=key.get("expires_at"),
+            ),
+            limits=PlanLimits(
+                max_ttl_hours=body["limits"]["max_ttl_hours"],
+                max_file_size_mb=body["limits"]["max_file_size_mb"],
             ),
         )
 

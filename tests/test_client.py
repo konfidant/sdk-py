@@ -604,6 +604,47 @@ def test_list_shares_has_more_pagination(client):
 
 
 # ---------------------------------------------------------------------------
+# me
+# ---------------------------------------------------------------------------
+
+ME_BODY = {
+    "organization": {"id": "org_1", "name": "Acme"},
+    "api_key": {
+        "name": "Slack",
+        "environment": "live",
+        "scopes": ["texts:create", "files:create"],
+        "rate_limit_per_minute": 60,
+        "expires_at": None,
+    },
+    "limits": {"max_ttl_hours": 168, "max_file_size_mb": 100},
+}
+
+
+@respx.mock
+def test_me(client):
+    route = respx.get(f"{BASE_URL}/api/v1/me").mock(return_value=httpx.Response(200, json=ME_BODY))
+    info = client.me()
+    assert route.calls.last.request.headers["authorization"] == "Bearer test-key"
+    assert info.organization.id == "org_1"
+    assert info.organization.name == "Acme"
+    assert info.api_key.name == "Slack"
+    assert info.api_key.environment == "live"
+    assert info.api_key.scopes == ["texts:create", "files:create"]
+    assert info.api_key.rate_limit_per_minute == 60
+    assert info.api_key.expires_at is None
+    assert info.limits.max_ttl_hours == 168
+    assert info.limits.max_file_size_mb == 100
+
+
+@respx.mock
+def test_me_api_error_401(client):
+    respx.get(f"{BASE_URL}/api/v1/me").mock(return_value=httpx.Response(401, json={"error": "Invalid API key"}))
+    with pytest.raises(KonfidantApiError) as exc_info:
+        client.me()
+    assert exc_info.value.status_code == 401
+
+
+# ---------------------------------------------------------------------------
 # Removed API surface
 # ---------------------------------------------------------------------------
 

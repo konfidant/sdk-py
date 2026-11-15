@@ -70,3 +70,33 @@ class Pagination:
 class ListSharesResponse:
     shares: list[Share]
     pagination: Pagination
+
+
+@dataclass(frozen=True)
+class Organization:
+    id: str
+    name: str
+
+
+@dataclass(frozen=True)
+class ApiKeyInfo:
+    name: str
+    environment: str
+    scopes: list[str]
+    rate_limit_per_minute: int
+    expires_at: str | None
+    """``None`` if the key never expires."""
+
+
+@dataclass(frozen=True)
+class PlanLimits:
+    max_ttl_hours: int
+    max_file_size_mb: int
+    """Largest file before encryption, in MB."""
+
+
+@dataclass(frozen=True)
+class KeyInfo:
+    organization: Organization
+    api_key: ApiKeyInfo
+    limits: PlanLimits
